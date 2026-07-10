@@ -98,6 +98,8 @@ def upload_to_bitrix_disk(local_file_path, folder_id, filename):
     with open(local_file_path, "rb") as f:
         files = {"file": (filename, f)}
         resp2 = requests.post(upload_url, files=files, timeout=120)
+    if not resp2.ok:
+        print("Bitrix24 (шаг 2) вернул ошибку, тело ответа:", resp2.text)
     resp2.raise_for_status()
     step2_result = resp2.json()
     print("Шаг 2 (загрузка содержимого):", step2_result)
