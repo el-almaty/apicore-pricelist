@@ -83,7 +83,7 @@ def upload_to_bitrix_disk(local_file_path, folder_id, filename):
     data = {
         "id": folder_id,
         "data[NAME]": filename,
-        "generateUniqueName": "false",
+        "generateUniqueName": "0",
     }
     resp1 = requests.post(step1_url, data=data, timeout=60)
     resp1.raise_for_status()
