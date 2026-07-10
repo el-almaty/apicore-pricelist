@@ -263,9 +263,15 @@ def main():
     out_file = "pricelist.xlsx"
 
     dfs_by_sheet = {}
+    failed = []
     for d in DISTRIBUTORS:
         print(f"=== Дистрибьютор: {d['name']} ({d['id']}) ===")
-        df = fetch_distributor_df(d["id"], run_started_at)
+        try:
+            df = fetch_distributor_df(d["id"], run_started_at)
+        except Exception as e:
+            print(f"  ОШИБКА при обработке {d['name']} ({d['id']}): {e}")
+            failed.append(d["name"])
+            continue
         sheet_name = sanitize_sheet_name(d["name"])
         # на случай совпадения названий после обрезки/очистки -- не даём листам дублироваться
         base_name, i = sheet_name, 2
@@ -275,6 +281,9 @@ def main():
             i += 1
         dfs_by_sheet[sheet_name] = df
         print(f"  готово: {len(df)} строк")
+
+    if not dfs_by_sheet:
+        raise RuntimeError("Ни один дистрибьютор не обработан успешно -- файл не создан.")
 
     with pd.ExcelWriter(out_file, engine="openpyxl") as writer:
         for sheet_name, df in dfs_by_sheet.items():
@@ -292,6 +301,10 @@ def main():
         upload_to_bitrix_disk(out_file, BITRIX_FOLDER_ID, "Прайс-лист.xlsx")
     else:
         print("BITRIX_FOLDER_ID не задан -- пропускаю загрузку на Bitrix24 Диск.")
+
+    if failed:
+        print(f"ВНИМАНИЕ: не удалось обработать {len(failed)} дистрибьютор(ов): {', '.join(failed)}")
+        raise SystemExit(1)  # файл всё равно загружен, но запуск помечается как проблемный
 
 
 if __name__ == "__main__":
