@@ -20,6 +20,7 @@
 """
 
 import os
+import base64
 import requests
 import pandas as pd
 import time
@@ -37,7 +38,7 @@ HEADERS = {
 }
 
 # --- Bitrix24 ---
-BITRIX_WEBHOOK = os.environ["BITRIX_WEBHOOK"]  # напр. https://xxx.bitrix24.kz/rest/xx/xxxxxxxx/
+BITRIX_WEBHOOK = os.environ["BITRIX_WEBHOOK"]  # напр. https://pulser.bitrix24.kz/rest/25/xxxxxxxx/
 BITRIX_FOLDER_ID = os.environ["BITRIX_FOLDER_ID"]
 
 
@@ -87,23 +88,39 @@ def find_existing_file_id(folder_id, filename):
 def upload_to_bitrix_disk(local_file_path, folder_id, filename):
     """Загружает файл в указанную папку на Диске Bitrix24.
     Если файл с таким именем уже существует -- обновляет его СОДЕРЖИМОЕ
-    через disk.file.uploadversion, благодаря чему ID файла и ссылка на него
-    не меняются от запуска к запуску. Если файла ещё нет -- создаёт его
-    через disk.folder.uploadfile (только в самый первый раз)."""
+    через disk.file.uploadversion (передаётся сразу base64, одним запросом),
+    благодаря чему ID файла и ссылка на него не меняются от запуска к запуску.
+    Если файла ещё нет -- создаёт его через disk.folder.uploadfile
+    (двухшаговая схема с uploadUrl, только в самый первый раз)."""
     existing_file_id = find_existing_file_id(folder_id, filename)
 
     if existing_file_id:
         print(f"Файл '{filename}' уже существует (ID {existing_file_id}) -- обновляю версию.")
-        step1_url = f"{BITRIX_WEBHOOK}disk.file.uploadversion"
-        data = {"id": existing_file_id}
-    else:
-        print(f"Файла '{filename}' ещё нет -- создаю новый.")
-        step1_url = f"{BITRIX_WEBHOOK}disk.folder.uploadfile"
-        data = {
-            "id": folder_id,
-            "data[NAME]": filename,
-        }
+        with open(local_file_path, "rb") as f:
+            content_b64 = base64.b64encode(f.read()).decode("ascii")
 
+        data = {
+            "id": existing_file_id,
+            "fileContent[0]": filename,
+            "fileContent[1]": content_b64,
+        }
+        resp = requests.post(f"{BITRIX_WEBHOOK}disk.file.uploadversion", data=data, timeout=120)
+        if not resp.ok:
+            print("Bitrix24 вернул ошибку, тело ответа:", resp.text)
+        resp.raise_for_status()
+        result = resp.json()
+        print("Ответ Bitrix24:", result)
+        if "result" not in result:
+            raise RuntimeError(f"Bitrix24 вернул ошибку при обновлении версии: {result}")
+        print("Файл на Диске Bitrix24 обновлён.")
+        return result["result"]
+
+    print(f"Файла '{filename}' ещё нет -- создаю новый.")
+    step1_url = f"{BITRIX_WEBHOOK}disk.folder.uploadfile"
+    data = {
+        "id": folder_id,
+        "data[NAME]": filename,
+    }
     resp1 = requests.post(step1_url, data=data, timeout=60)
     if not resp1.ok:
         print("Bitrix24 (шаг 1) вернул ошибку, тело ответа:", resp1.text)
