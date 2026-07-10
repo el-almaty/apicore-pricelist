@@ -37,7 +37,7 @@ HEADERS = {
 }
 
 # --- Bitrix24 ---
-BITRIX_WEBHOOK = os.environ["BITRIX_WEBHOOK"]  # напр. https://xxxxxx.bitrix24.kz/rest/xx/xxxxxxxx/
+BITRIX_WEBHOOK = os.environ["BITRIX_WEBHOOK"]  # напр. https://xxx.bitrix24.kz/rest/xx/xxxxxxxx/
 BITRIX_FOLDER_ID = os.environ["BITRIX_FOLDER_ID"]
 
 
@@ -72,20 +72,41 @@ def category_path(cat_id, categories_by_id):
     return top, sub
 
 
+def find_existing_file_id(folder_id, filename):
+    """Ищет в папке файл с указанным именем. Возвращает его ID или None, если не найден."""
+    url = f"{BITRIX_WEBHOOK}disk.folder.getchildren"
+    resp = requests.post(url, data={"id": folder_id}, timeout=60)
+    resp.raise_for_status()
+    result = resp.json()
+    for item in result.get("result", []):
+        if item.get("TYPE") == "file" and item.get("NAME") == filename:
+            return item["ID"]
+    return None
+
+
 def upload_to_bitrix_disk(local_file_path, folder_id, filename):
     """Загружает файл в указанную папку на Диске Bitrix24.
-    Это двухшаговый процесс:
-    1) disk.folder.uploadfile -- получаем одноразовый uploadUrl
-    2) POST файла на этот uploadUrl -- собственно загрузка содержимого
-    generateUniqueName=false означает: файл с тем же именем будет ЗАМЕНЁН,
-    а не продублирован -- благодаря этому ссылка на файл в чате остаётся рабочей."""
-    step1_url = f"{BITRIX_WEBHOOK}disk.folder.uploadfile"
-    data = {
-        "id": folder_id,
-        "data[NAME]": filename,
-        "generateUniqueName": "0",
-    }
+    Если файл с таким именем уже существует -- обновляет его СОДЕРЖИМОЕ
+    через disk.file.uploadversion, благодаря чему ID файла и ссылка на него
+    не меняются от запуска к запуску. Если файла ещё нет -- создаёт его
+    через disk.folder.uploadfile (только в самый первый раз)."""
+    existing_file_id = find_existing_file_id(folder_id, filename)
+
+    if existing_file_id:
+        print(f"Файл '{filename}' уже существует (ID {existing_file_id}) -- обновляю версию.")
+        step1_url = f"{BITRIX_WEBHOOK}disk.file.uploadversion"
+        data = {"id": existing_file_id}
+    else:
+        print(f"Файла '{filename}' ещё нет -- создаю новый.")
+        step1_url = f"{BITRIX_WEBHOOK}disk.folder.uploadfile"
+        data = {
+            "id": folder_id,
+            "data[NAME]": filename,
+        }
+
     resp1 = requests.post(step1_url, data=data, timeout=60)
+    if not resp1.ok:
+        print("Bitrix24 (шаг 1) вернул ошибку, тело ответа:", resp1.text)
     resp1.raise_for_status()
     step1_result = resp1.json()
     print("Шаг 1 (получение uploadUrl):", step1_result)
