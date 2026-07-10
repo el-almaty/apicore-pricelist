@@ -26,6 +26,10 @@ import pandas as pd
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from openpyxl import load_workbook
+from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.table import Table, TableStyleInfo
 
 API_KEY = os.environ["APICORE_API_KEY"]
 DISTRIBUTOR_ID = os.environ["APICORE_DISTRIBUTOR_ID"]
@@ -150,6 +154,50 @@ def upload_to_bitrix_disk(local_file_path, folder_id, filename):
     return step2_result["result"]
 
 
+def format_excel(out_file, df):
+    """Оформляет файл как Excel-таблицу (Table): фильтры, жирная шапка,
+    полосатая заливка, подходит как источник для сводных таблиц.
+    Плюс подбирает ширину столбцов по содержимому и формат чисел."""
+    wb = load_workbook(out_file)
+    ws = wb.active
+    ws.title = "Прайс-лист"
+
+    n_rows = ws.max_row
+    n_cols = ws.max_column
+    last_col_letter = get_column_letter(n_cols)
+
+    # Таблица с фильтрами и жирной шапкой (входит в стиль)
+    table = Table(displayName="PriceList", ref=f"A1:{last_col_letter}{n_rows}")
+    table.tableStyleInfo = TableStyleInfo(
+        name="TableStyleMedium9", showRowStripes=True, showColumnStripes=False
+    )
+    ws.add_table(table)
+
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+    ws.freeze_panes = "A2"  # шапка всегда видна при прокрутке
+
+    # Автоширина по содержимому (с разумным потолком, чтобы длинные названия
+    # не растягивали колонку на весь экран)
+    for col_idx in range(1, n_cols + 1):
+        letter = get_column_letter(col_idx)
+        max_len = max(
+            len(str(cell.value)) if cell.value is not None else 0
+            for cell in ws[letter]
+        )
+        ws.column_dimensions[letter].width = min(max_len + 2, 60)
+
+    # Числовой формат с разделителем тысяч для цены и наличия
+    price_col = df.columns.get_loc("Цена, KZT") + 1
+    qty_col = df.columns.get_loc("Наличие, шт") + 1
+    for row in range(2, n_rows + 1):
+        ws.cell(row=row, column=price_col).number_format = "#,##0"
+        ws.cell(row=row, column=qty_col).number_format = "#,##0"
+
+    wb.save(out_file)
+
+
 def main():
     run_started_at = datetime.now(ZoneInfo("Asia/Almaty")).strftime("%d.%m.%Y %H:%M:%S")
     body = {"distributor_id": DISTRIBUTOR_ID, "catalog_code": CATALOG_CODE}
@@ -219,6 +267,7 @@ def main():
 
     out_file = "pricelist.xlsx"
     df.to_excel(out_file, index=False)
+    format_excel(out_file, df)
     print(f"Готово. Файл сохранён: {out_file} ({len(df)} строк)")
 
     if BITRIX_FOLDER_ID:
