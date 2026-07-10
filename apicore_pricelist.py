@@ -25,6 +25,7 @@ import requests
 import pandas as pd
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 API_KEY = os.environ["APICORE_API_KEY"]
 DISTRIBUTOR_ID = os.environ["APICORE_DISTRIBUTOR_ID"]
@@ -38,7 +39,7 @@ HEADERS = {
 }
 
 # --- Bitrix24 ---
-BITRIX_WEBHOOK = os.environ["BITRIX_WEBHOOK"]  # напр. https://pulser.bitrix24.kz/rest/25/xxxxxxxx/
+BITRIX_WEBHOOK = os.environ["BITRIX_WEBHOOK"]  # напр. https://xxx.bitrix24.kz/rest/xx/xxxxxxxx/
 BITRIX_FOLDER_ID = os.environ["BITRIX_FOLDER_ID"]
 
 
@@ -150,7 +151,7 @@ def upload_to_bitrix_disk(local_file_path, folder_id, filename):
 
 
 def main():
-    run_started_at = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+    run_started_at = datetime.now(ZoneInfo("Asia/Almaty")).strftime("%d.%m.%Y %H:%M:%S")
     body = {"distributor_id": DISTRIBUTOR_ID, "catalog_code": CATALOG_CODE}
 
     print("Получаю список категорий...")
