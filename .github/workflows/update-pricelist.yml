@@ -23,7 +23,7 @@ jobs:
       - name: Run price list script
         env:
           APICORE_API_KEY: ${{ secrets.APICORE_API_KEY }}
-          APICORE_DISTRIBUTOR_ID: ${{ secrets.APICORE_DISTRIBUTOR_ID }}
+          APICORE_DISTRIBUTORS: ${{ secrets.APICORE_DISTRIBUTORS }}
           APICORE_CATALOG_CODE: ${{ secrets.APICORE_CATALOG_CODE }}
           BITRIX_WEBHOOK: ${{ secrets.BITRIX_WEBHOOK }}
           BITRIX_FOLDER_ID: ${{ secrets.BITRIX_FOLDER_ID }}
