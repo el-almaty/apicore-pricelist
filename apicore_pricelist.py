@@ -213,7 +213,7 @@ def build_summary_sheet(wb, distributors_and_sheets, run_started_dt):
     row = 2
     for name, sheet_name in distributors_and_sheets:
         ws.cell(row=row, column=1, value=name)
-        cell_b = ws.cell(row=row, column=2, value=run_started_dt)
+        cell_b = ws.cell(row=row, column=2, value=run_started_dt.replace(tzinfo=None))
         cell_b.number_format = "dd.mm.yyyy hh:mm:ss"
         cell_c = ws.cell(row=row, column=3, value=f"=(NOW()-B{row})*24")
         cell_c.number_format = "0.0"
