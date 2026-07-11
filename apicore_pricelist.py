@@ -26,9 +26,10 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from openpyxl import load_workbook
-from openpyxl.styles import Font
+from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.formatting.rule import CellIsRule
 
 API_KEY = os.environ["APICORE_API_KEY"]
 CATALOG_CODE = os.environ.get("APICORE_CATALOG_CODE", "main")
@@ -136,6 +137,12 @@ def fetch_distributor_df(distributor_id, run_started_at):
     df = pd.DataFrame(rows)
     sort_cols = ["Категория 1 ур.", "Категория 2 ур.", "Наименование"]
     df = df.sort_values(by=sort_cols, key=lambda col: col.str.lower())
+
+    # если у ЭТОГО дистрибьютора производитель не указан вообще ни у одного
+    # товара -- колонка только мешает (только прочерки), убираем её
+    if (df["Производитель"] == "-").all():
+        df = df.drop(columns=["Производитель"])
+
     return df
 
 
@@ -187,6 +194,53 @@ def format_worksheet(ws, df):
     for row in range(2, n_rows + 1):
         ws.cell(row=row, column=price_col).number_format = "#,##0"
         ws.cell(row=row, column=qty_col).number_format = "#,##0"
+
+
+def build_summary_sheet(wb, distributors_and_sheets, run_started_dt):
+    """Создаёт первый лист 'Сводка': по каждому дистрибьютору -- когда получены
+    данные и сколько часов назад, с цветовой индикацией:
+    зелёный -- обновлено < 1 часа назад
+    жёлтый  -- от 1 до 24 часов назад
+    красный -- сутки и более назад (вероятно, автообновление сломалось)"""
+    ws = wb.create_sheet("Сводка", 0)
+
+    ws["A1"] = "Дистрибьютор"
+    ws["B1"] = "Данные получены"
+    ws["C1"] = "Обновлено, часов назад"
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+    row = 2
+    for name, sheet_name in distributors_and_sheets:
+        ws.cell(row=row, column=1, value=name)
+        cell_b = ws.cell(row=row, column=2, value=run_started_dt)
+        cell_b.number_format = "dd.mm.yyyy hh:mm:ss"
+        cell_c = ws.cell(row=row, column=3, value=f"=(NOW()-B{row})*24")
+        cell_c.number_format = "0.0"
+        # кликабельная ссылка на лист этого дистрибьютора
+        ws.cell(row=row, column=1).hyperlink = f"#'{sheet_name}'!A1"
+        ws.cell(row=row, column=1).font = Font(color="0563C1", underline="single")
+        row += 1
+
+    last_row = row - 1
+    if last_row >= 2:
+        rng = f"C2:C{last_row}"
+        red = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+        yellow = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+        green = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+        # порядок важен: правила проверяются по очереди, stopIfTrue прерывает
+        # проверку на первом совпавшем условии
+        rule_red = CellIsRule(operator="greaterThan", formula=["24"], fill=red, stopIfTrue=True)
+        rule_yellow = CellIsRule(operator="greaterThan", formula=["1"], fill=yellow, stopIfTrue=True)
+        rule_green = CellIsRule(operator="lessThanOrEqual", formula=["1"], fill=green, stopIfTrue=True)
+        ws.conditional_formatting.add(rng, rule_red)
+        ws.conditional_formatting.add(rng, rule_yellow)
+        ws.conditional_formatting.add(rng, rule_green)
+
+    ws.column_dimensions["A"].width = 32
+    ws.column_dimensions["B"].width = 22
+    ws.column_dimensions["C"].width = 24
+    ws.freeze_panes = "A2"
 
 
 def find_existing_file_id(folder_id, filename):
@@ -266,10 +320,12 @@ def upload_to_bitrix_disk(local_file_path, folder_id, filename):
 
 
 def main():
-    run_started_at = datetime.now(ZoneInfo("Asia/Almaty")).strftime("%d.%m.%Y %H:%M:%S")
+    run_started_dt = datetime.now(ZoneInfo("Asia/Almaty"))
+    run_started_at = run_started_dt.strftime("%d.%m.%Y %H:%M:%S")
     out_file = "pricelist.xlsx"
 
     dfs_by_sheet = {}
+    succeeded_names = []
     failed = []
     for d in DISTRIBUTORS:
         print(f"=== Дистрибьютор: {d['name']} ({d['id']}) ===")
@@ -287,6 +343,7 @@ def main():
             sheet_name = base_name[: 31 - len(suffix)] + suffix
             i += 1
         dfs_by_sheet[sheet_name] = df
+        succeeded_names.append((d["name"], sheet_name))
         print(f"  готово: {len(df)} строк")
 
     if not dfs_by_sheet:
@@ -299,6 +356,7 @@ def main():
     wb = load_workbook(out_file)
     for sheet_name, df in dfs_by_sheet.items():
         format_worksheet(wb[sheet_name], df)
+    build_summary_sheet(wb, succeeded_names, run_started_dt)
     wb.save(out_file)
 
     total_rows = sum(len(df) for df in dfs_by_sheet.values())
