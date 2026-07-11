@@ -124,13 +124,11 @@ def fetch_distributor_df(distributor_id, run_started_at):
             "Категория 2 ур.": sub_cat,
             "ID": pid,
             "Наименование": p["name"],
-            "Производитель": p.get("vendor", ""),
+            "Производитель": p.get("vendor") or "-",
             "Артикул": p.get("vendor_code", ""),
             "Цена, KZT": prices_by_id.get(pid),
             "Наличие, шт": qty_by_id.get(pid, 0),
             "Штрихкод": p.get("barcode", ""),
-            "Обновление цены (apicore)": price_updated_by_id.get(pid, ""),
-            "Обновление остатка (apicore)": qty_updated_by_id.get(pid, ""),
             "Данные получены": run_started_at,
         })
 
@@ -166,13 +164,22 @@ def format_worksheet(ws, df):
 
     ws.freeze_panes = "A2"
 
+    # По умолчанию ширина колонки = длина самого длинного значения (+запас),
+    # но для отдельных колонок задан свой потолок -- иначе они растягивают лист
+    max_width_by_column = {
+        "Категория 2 ур.": 40,
+    }
+    header_by_col_idx = {c: cell.value for c, cell in enumerate(ws[1], start=1)}
+
     for col_idx in range(1, n_cols + 1):
         letter = get_column_letter(col_idx)
         max_len = max(
             len(str(cell.value)) if cell.value is not None else 0
             for cell in ws[letter]
         )
-        ws.column_dimensions[letter].width = min(max_len + 2, 60)
+        header = header_by_col_idx.get(col_idx)
+        cap = max_width_by_column.get(header, 60)
+        ws.column_dimensions[letter].width = min(max_len + 2, cap)
 
     price_col = df.columns.get_loc("Цена, KZT") + 1
     qty_col = df.columns.get_loc("Наличие, шт") + 1
