@@ -55,11 +55,12 @@ def call(version, method, body):
     return resp.json()
 
 
-def category_path(cat_id, categories_by_id):
-    """Возвращает (категория_1_уровня, категория_2_уровня_и_глубже) для товара.
-    Идёт вверх по parent_id, пока не дойдёт до корня (parent_id == 0)."""
+def category_chain(cat_id, categories_by_id):
+    """Возвращает список названий категорий от корня до текущей (полный путь).
+    Идёт вверх по parent_id, пока не дойдёт до корня (parent_id == 0).
+    Для товара без категории возвращает ["Без категории"]."""
     if cat_id not in categories_by_id or cat_id == 0:
-        return "Без категории", ""
+        return ["Без категории"]
 
     chain = []
     node = categories_by_id.get(cat_id)
@@ -73,9 +74,7 @@ def category_path(cat_id, categories_by_id):
         node = categories_by_id.get(parent_id)
 
     chain.reverse()  # теперь от корня к текущей категории
-    top = chain[0]
-    sub = " > ".join(chain[1:])  # всё, что глубже 1-го уровня
-    return top, sub
+    return chain
 
 
 def fetch_distributor_df(distributor_id, run_started_at):
@@ -115,14 +114,29 @@ def fetch_distributor_df(distributor_id, run_started_at):
             qty_updated_by_id[p["product_id"]] = p["date_update"]
     time.sleep(0.5)
 
+    # Сначала считаем цепочку категорий для каждого товара и находим
+    # максимальную глубину вложенности именно у ЭТОГО дистрибьютора --
+    # число колонок категорий подстраивается под неё (1, 2, 3 и более)
+    chains_by_pid = {p["id"]: category_chain(p.get("category_id", 0), categories_by_id) for p in products}
+    max_depth = max((len(c) for c in chains_by_pid.values()), default=1)
+    max_depth = max(max_depth, 1)
+
+    if max_depth == 1:
+        cat_col_names = ["Категория"]
+    else:
+        cat_col_names = [f"Категория {i} ур." for i in range(1, max_depth + 1)]
+
     rows = []
     for p in products:
         pid = p["id"]
-        cat_id = p.get("category_id", 0)
-        top_cat, sub_cat = category_path(cat_id, categories_by_id)
-        rows.append({
-            "Категория 1 ур.": top_cat,
-            "Категория 2 ур.": sub_cat,
+        chain = chains_by_pid[pid]
+        # дополняем пустыми строками до одинаковой длины у всех товаров
+        padded_chain = chain + [""] * (max_depth - len(chain))
+
+        row = {}
+        for col_name, value in zip(cat_col_names, padded_chain):
+            row[col_name] = value
+        row.update({
             "ID": pid,
             "Наименование": p["name"],
             "Производитель": p.get("vendor") or "-",
@@ -133,9 +147,10 @@ def fetch_distributor_df(distributor_id, run_started_at):
             "NTIN": p.get("ntin", ""),
             "Данные получены": run_started_at,
         })
+        rows.append(row)
 
     df = pd.DataFrame(rows)
-    sort_cols = ["Категория 1 ур.", "Категория 2 ур.", "Наименование"]
+    sort_cols = cat_col_names + ["Наименование"]
     df = df.sort_values(by=sort_cols, key=lambda col: col.str.lower())
 
     # если у ЭТОГО дистрибьютора производитель не указан вообще ни у одного
@@ -178,10 +193,7 @@ def format_worksheet(ws, df):
     ws.freeze_panes = "A2"
 
     # По умолчанию ширина колонки = длина самого длинного значения (+запас),
-    # но для отдельных колонок задан свой потолок -- иначе они растягивают лист
-    max_width_by_column = {
-        "Категория 2 ур.": 40,
-    }
+    # но для колонок категорий задан свой потолок -- иначе они растягивают лист
     header_by_col_idx = {c: cell.value for c, cell in enumerate(ws[1], start=1)}
 
     for col_idx in range(1, n_cols + 1):
@@ -190,8 +202,8 @@ def format_worksheet(ws, df):
             len(str(cell.value)) if cell.value is not None else 0
             for cell in ws[letter]
         )
-        header = header_by_col_idx.get(col_idx)
-        cap = max_width_by_column.get(header, 60)
+        header = header_by_col_idx.get(col_idx) or ""
+        cap = 40 if header.startswith("Категория") else 60
         ws.column_dimensions[letter].width = min(max_len + 2, cap)
 
     price_col = df.columns.get_loc("Цена, KZT") + 1
