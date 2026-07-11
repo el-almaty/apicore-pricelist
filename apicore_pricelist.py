@@ -116,25 +116,32 @@ def fetch_distributor_df(distributor_id, run_started_at):
 
     # Сначала считаем цепочку категорий для каждого товара и находим
     # максимальную глубину вложенности именно у ЭТОГО дистрибьютора --
-    # число колонок категорий подстраивается под неё (1, 2, 3 и более)
+    # число колонок категорий подстраивается под неё, но не больше 3:
+    # если уровней 4 и больше, всё, что глубже 2-го, склеивается в 3-ю колонку через " > "
+    MAX_CAT_COLS = 3
     chains_by_pid = {p["id"]: category_chain(p.get("category_id", 0), categories_by_id) for p in products}
     max_depth = max((len(c) for c in chains_by_pid.values()), default=1)
-    max_depth = max(max_depth, 1)
+    col_count = max(min(max_depth, MAX_CAT_COLS), 1)
 
-    if max_depth == 1:
+    if col_count == 1:
         cat_col_names = ["Категория"]
     else:
-        cat_col_names = [f"Категория {i} ур." for i in range(1, max_depth + 1)]
+        cat_col_names = [f"Категория {i} ур." for i in range(1, col_count + 1)]
+
+    def to_display_chain(chain):
+        if len(chain) <= col_count:
+            return chain + [""] * (col_count - len(chain))
+        # уровней больше, чем колонок -- последняя колонка вбирает всё, что глубже
+        return chain[: col_count - 1] + [" > ".join(chain[col_count - 1:])]
 
     rows = []
     for p in products:
         pid = p["id"]
         chain = chains_by_pid[pid]
-        # дополняем пустыми строками до одинаковой длины у всех товаров
-        padded_chain = chain + [""] * (max_depth - len(chain))
+        display_chain = to_display_chain(chain)
 
         row = {}
-        for col_name, value in zip(cat_col_names, padded_chain):
+        for col_name, value in zip(cat_col_names, display_chain):
             row[col_name] = value
         row.update({
             "ID": pid,
@@ -203,7 +210,12 @@ def format_worksheet(ws, df):
             for cell in ws[letter]
         )
         header = header_by_col_idx.get(col_idx) or ""
-        cap = 40 if header.startswith("Категория") else 60
+        if header.startswith("Категория"):
+            cap = 35
+        elif header == "Артикул":
+            cap = 40
+        else:
+            cap = 60
         ws.column_dimensions[letter].width = min(max_len + 2, cap)
 
     price_col = df.columns.get_loc("Цена, KZT") + 1
