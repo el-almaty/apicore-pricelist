@@ -47,12 +47,23 @@ BITRIX_WEBHOOK = os.environ["BITRIX_WEBHOOK"]  # напр. https://xxx.bitrix24.
 BITRIX_FOLDER_ID = os.environ["BITRIX_FOLDER_ID"]
 
 
-def call(version, method, body):
-    """Делает POST-запрос к apicore и возвращает JSON-ответ."""
+def call(version, method, body, max_retries=3):
+    """Делает POST-запрос к apicore и возвращает JSON-ответ.
+    При сбое (таймаут, временная перегрузка сервера и т.п.) повторяет попытку
+    с нарастающей паузой, прежде чем сдаться."""
     url = f"{BASE_URL}/{version}/{method}"
-    resp = requests.post(url, headers=HEADERS, json=body, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
+    last_exc = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.post(url, headers=HEADERS, json=body, timeout=60)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            last_exc = e
+            wait = attempt * 5  # 5, 10, 15 секунд
+            print(f"    Попытка {attempt}/{max_retries} для {method} не удалась ({e}), жду {wait} сек...")
+            time.sleep(wait)
+    raise last_exc
 
 
 def category_chain(cat_id, categories_by_id):
@@ -86,13 +97,13 @@ def fetch_distributor_df(distributor_id, run_started_at):
     categories_resp = call("v1", "distrib.category.list", body)
     categories_by_id = {c["id"]: c for c in categories_resp["categories"]}
     print(f"    категорий получено: {len(categories_by_id)}")
-    time.sleep(0.5)
+    time.sleep(0.7)
 
     print("  Получаю список товаров...")
     products_resp = call("v1", "distrib.product.list", body)
     products = products_resp["products"]
     print(f"    товаров получено: {len(products)}")
-    time.sleep(0.5)
+    time.sleep(0.7)
 
     print("  Получаю цены...")
     prices_resp = call("v2", "distrib.product.prices", body)
@@ -102,7 +113,7 @@ def fetch_distributor_df(distributor_id, run_started_at):
         prices_by_id[p["product_id"]] = p["purchase"]["price"]
         if "date_update" in p:
             price_updated_by_id[p["product_id"]] = p["date_update"]
-    time.sleep(0.5)
+    time.sleep(0.7)
 
     print("  Получаю остатки...")
     qty_resp = call("v1", "distrib.product.quantities", body)
@@ -112,7 +123,7 @@ def fetch_distributor_df(distributor_id, run_started_at):
         qty_by_id[p["product_id"]] = p["quantity"]
         if "date_update" in p:
             qty_updated_by_id[p["product_id"]] = p["date_update"]
-    time.sleep(0.5)
+    time.sleep(0.7)
 
     # Сначала считаем цепочку категорий для каждого товара и находим
     # максимальную глубину вложенности именно у ЭТОГО дистрибьютора --
