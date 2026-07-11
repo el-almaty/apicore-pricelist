@@ -129,6 +129,7 @@ def fetch_distributor_df(distributor_id, run_started_at):
             "Цена, KZT": prices_by_id.get(pid),
             "Наличие, шт": qty_by_id.get(pid, 0),
             "Штрихкод": p.get("barcode", ""),
+            "NTIN": p.get("ntin", ""),
             "Данные получены": run_started_at,
         })
 
