@@ -143,6 +143,11 @@ def fetch_distributor_df(distributor_id, run_started_at):
     if (df["Производитель"] == "-").all():
         df = df.drop(columns=["Производитель"])
 
+    # то же самое для штрихкода и NTIN -- если пусто у всех товаров, колонка не нужна
+    for col in ["Штрихкод", "NTIN"]:
+        if (df[col].astype(str).str.strip() == "").all():
+            df = df.drop(columns=[col])
+
     return df
 
 
@@ -215,8 +220,8 @@ def build_summary_sheet(wb, distributors_and_sheets, run_started_dt):
         ws.cell(row=row, column=1, value=name)
         cell_b = ws.cell(row=row, column=2, value=run_started_dt.replace(tzinfo=None))
         cell_b.number_format = "dd.mm.yyyy hh:mm:ss"
-        cell_c = ws.cell(row=row, column=3, value=f"=(NOW()-B{row})*24")
-        cell_c.number_format = "0.0"
+        cell_c = ws.cell(row=row, column=3, value=f"=NOW()-B{row}")
+        cell_c.number_format = "[h]:mm"
         # кликабельная ссылка на лист этого дистрибьютора
         ws.cell(row=row, column=1).hyperlink = f"#'{sheet_name}'!A1"
         ws.cell(row=row, column=1).font = Font(color="0563C1", underline="single")
@@ -230,9 +235,9 @@ def build_summary_sheet(wb, distributors_and_sheets, run_started_dt):
         green = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
         # порядок важен: правила проверяются по очереди, stopIfTrue прерывает
         # проверку на первом совпавшем условии
-        rule_red = CellIsRule(operator="greaterThan", formula=["24"], fill=red, stopIfTrue=True)
-        rule_yellow = CellIsRule(operator="greaterThan", formula=["1"], fill=yellow, stopIfTrue=True)
-        rule_green = CellIsRule(operator="lessThanOrEqual", formula=["1"], fill=green, stopIfTrue=True)
+        rule_red = CellIsRule(operator="greaterThan", formula=["1"], fill=red, stopIfTrue=True)
+        rule_yellow = CellIsRule(operator="greaterThan", formula=["1/24"], fill=yellow, stopIfTrue=True)
+        rule_green = CellIsRule(operator="lessThanOrEqual", formula=["1/24"], fill=green, stopIfTrue=True)
         ws.conditional_formatting.add(rng, rule_red)
         ws.conditional_formatting.add(rng, rule_yellow)
         ws.conditional_formatting.add(rng, rule_green)
