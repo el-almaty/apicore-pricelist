@@ -190,9 +190,6 @@ def fetch_distributor_df(distributor_id, run_started_at):
         pid = p["id"]
         chain = chains_by_pid[pid]
         display_chain = to_display_chain(chain)
-        cat_record = categories_by_id.get(p.get("category_id", 0))
-        category_updated = cat_record.get("date_update", "") if cat_record else ""
-
         row = {}
         for col_name, value in zip(cat_col_names, display_chain):
             row[col_name] = value
@@ -205,9 +202,6 @@ def fetch_distributor_df(distributor_id, run_started_at):
             "Наличие, шт": qty_by_id.get(pid, 0),
             "Штрихкод": clean_str(p.get("barcode", "")),
             "NTIN": clean_str(p.get("ntin", "")),
-            # это дата обновления САМОЙ КАТЕГОРИИ у поставщика (единственная метка
-            # времени, которую вообще отдаёт apicore) -- НЕ дата обновления цены/остатка
-            "Обновлено (категория, apicore)": clean_str(category_updated),
             "Данные получены": run_started_at,
         })
         rows.append(row)
@@ -221,8 +215,8 @@ def fetch_distributor_df(distributor_id, run_started_at):
     if (df["Производитель"] == "-").all():
         df = df.drop(columns=["Производитель"])
 
-    # то же самое для штрихкода, NTIN и даты категории -- если пусто у всех товаров, колонка не нужна
-    for col in ["Штрихкод", "NTIN", "Обновлено (категория, apicore)"]:
+    # то же самое для штрихкода и NTIN -- если пусто у всех товаров, колонка не нужна
+    for col in ["Штрихкод", "NTIN"]:
         if (df[col].astype(str).str.strip() == "").all():
             df = df.drop(columns=[col])
 
