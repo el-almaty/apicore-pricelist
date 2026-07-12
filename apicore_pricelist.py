@@ -47,6 +47,17 @@ BITRIX_WEBHOOK = os.environ["BITRIX_WEBHOOK"]  # напр. https://xxx.bitrix24.
 BITRIX_FOLDER_ID = os.environ["BITRIX_FOLDER_ID"]
 
 
+ILLEGAL_XLSX_CHARS = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+
+
+def clean_str(value):
+    """Убирает управляющие символы, которые Excel-формат (.xlsx) физически
+    не может хранить в ячейке -- иначе openpyxl падает с IllegalCharacterError."""
+    if isinstance(value, str):
+        return ILLEGAL_XLSX_CHARS.sub("", value)
+    return value
+
+
 def call(version, method, body, max_retries=3):
     """Делает POST-запрос к apicore и возвращает JSON-ответ.
     При сбое (таймаут, временная перегрузка сервера и т.п.) повторяет попытку
@@ -78,7 +89,7 @@ def category_chain(cat_id, categories_by_id):
     seen = set()
     while node is not None and node["id"] not in seen:
         seen.add(node["id"])
-        chain.append(node["name"])
+        chain.append(clean_str(node["name"]))
         parent_id = node.get("parent_id", 0)
         if not parent_id:
             break
@@ -187,16 +198,16 @@ def fetch_distributor_df(distributor_id, run_started_at):
             row[col_name] = value
         row.update({
             "ID": pid,
-            "Наименование": p["name"],
-            "Производитель": p.get("vendor") or "-",
-            "Артикул": p.get("vendor_code", ""),
+            "Наименование": clean_str(p["name"]),
+            "Производитель": clean_str(p.get("vendor")) or "-",
+            "Артикул": clean_str(p.get("vendor_code", "")),
             "Цена, KZT": prices_by_id.get(pid),
             "Наличие, шт": qty_by_id.get(pid, 0),
-            "Штрихкод": p.get("barcode", ""),
-            "NTIN": p.get("ntin", ""),
+            "Штрихкод": clean_str(p.get("barcode", "")),
+            "NTIN": clean_str(p.get("ntin", "")),
             # это дата обновления САМОЙ КАТЕГОРИИ у поставщика (единственная метка
             # времени, которую вообще отдаёт apicore) -- НЕ дата обновления цены/остатка
-            "Обновлено (категория, apicore)": category_updated,
+            "Обновлено (категория, apicore)": clean_str(category_updated),
             "Данные получены": run_started_at,
         })
         rows.append(row)
