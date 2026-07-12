@@ -88,38 +88,67 @@ def category_chain(cat_id, categories_by_id):
     return chain
 
 
+def fetch_all_pages(version, method, body, items_key):
+    """Собирает ВСЕ элементы метода, даже если ответ приходит по частям
+    (постранично, через offset/next_offset/total). Для небольших дистрибьюторов,
+    у которых всё влезает в один ответ, отработает как обычный одиночный запрос."""
+    all_items = []
+    offset = 0
+    while True:
+        page_body = dict(body)
+        page_body["offset"] = offset
+        resp = call(version, method, page_body)
+        items = resp.get(items_key, [])
+        all_items.extend(items)
+
+        total = resp.get("total")
+        next_offset = resp.get("next_offset")
+        count = resp.get("count", len(items))
+
+        if total is not None and total > len(items) and (len(all_items) < total or next_offset is not None):
+            print(f"    страница: получено {len(all_items)} из {total}")
+
+        # условия остановки: нет информации о постраничности, следующей
+        # страницы нет, страница пустая, или offset не продвигается (защита от зацикливания)
+        if total is None or next_offset is None or not items or next_offset <= offset:
+            break
+        offset = next_offset
+        time.sleep(0.7)  # лимит apicore -- не больше 2 запросов в секунду
+
+    return all_items
+
+
 def fetch_distributor_df(distributor_id, run_started_at):
     """Собирает полный прайс-лист (категории + товары + цены + остатки)
     для одного дистрибьютора и возвращает готовый DataFrame."""
     body = {"distributor_id": distributor_id, "catalog_code": CATALOG_CODE}
 
     print("  Получаю список категорий...")
-    categories_resp = call("v1", "distrib.category.list", body)
-    categories_by_id = {c["id"]: c for c in categories_resp["categories"]}
+    categories = fetch_all_pages("v1", "distrib.category.list", body, "categories")
+    categories_by_id = {c["id"]: c for c in categories}
     print(f"    категорий получено: {len(categories_by_id)}")
     time.sleep(0.7)
 
     print("  Получаю список товаров...")
-    products_resp = call("v1", "distrib.product.list", body)
-    products = products_resp["products"]
+    products = fetch_all_pages("v1", "distrib.product.list", body, "products")
     print(f"    товаров получено: {len(products)}")
     time.sleep(0.7)
 
     print("  Получаю цены...")
-    prices_resp = call("v2", "distrib.product.prices", body)
+    prices_list = fetch_all_pages("v2", "distrib.product.prices", body, "products")
     prices_by_id = {}
     price_updated_by_id = {}
-    for p in prices_resp["products"]:
+    for p in prices_list:
         prices_by_id[p["product_id"]] = p["purchase"]["price"]
         if "date_update" in p:
             price_updated_by_id[p["product_id"]] = p["date_update"]
     time.sleep(0.7)
 
     print("  Получаю остатки...")
-    qty_resp = call("v1", "distrib.product.quantities", body)
+    qty_list = fetch_all_pages("v1", "distrib.product.quantities", body, "products")
     qty_by_id = {}
     qty_updated_by_id = {}
-    for p in qty_resp["products"]:
+    for p in qty_list:
         qty_by_id[p["product_id"]] = p["quantity"]
         if "date_update" in p:
             qty_updated_by_id[p["product_id"]] = p["date_update"]
