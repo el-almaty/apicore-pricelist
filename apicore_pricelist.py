@@ -214,11 +214,11 @@ def fetch_distributor_df(distributor_id, run_started_at):
             "Артикул": clean_str(p.get("vendor_code", "")),
             "Цена, KZT": prices_by_id.get(pid),
             "Наличие, шт": qty_by_id.get(pid, 0),
-            # это дата, когда КОЛИЧЕСТВО последний раз ИЗМЕНИЛОСЬ у поставщика
-            # (не дата подтверждения/выгрузки данных дистрибьютором)
-            "Остаток не менялся с (apicore)": clean_str(qty_updated_by_id.get(pid, "")),
             "Штрихкод": clean_str(p.get("barcode", "")),
             "NTIN": clean_str(p.get("ntin", "")),
+            # это дата, когда КОЛИЧЕСТВО последний раз ИЗМЕНИЛОСЬ у поставщика
+            # (не дата подтверждения/выгрузки данных дистрибьютором)
+            "Дата изм. стока": clean_str(qty_updated_by_id.get(pid, "")),
             "Данные получены": run_started_at,
         })
         rows.append(row)
@@ -233,7 +233,7 @@ def fetch_distributor_df(distributor_id, run_started_at):
         df = df.drop(columns=["Производитель"])
 
     # то же самое для штрихкода, NTIN и даты изменения остатка -- если пусто у всех товаров, колонка не нужна
-    for col in ["Штрихкод", "NTIN", "Остаток не менялся с (apicore)"]:
+    for col in ["Штрихкод", "NTIN", "Дата изм. стока"]:
         if (df[col].astype(str).str.strip() == "").all():
             df = df.drop(columns=[col])
 
@@ -415,10 +415,11 @@ def upload_to_bitrix_disk(local_file_path, folder_id, filename):
     return step2_result["result"]
 
 
-def build_excel_file(out_file, distributor_entries, dfs_by_id, run_started_dt, include_summary):
+def build_excel_file(out_file, distributor_entries, dfs_by_id, run_started_dt, include_summary, exclude_columns=None):
     """Собирает один Excel-файл из уже полученных данных.
     distributor_entries -- список (id, name) в нужном порядке для этого файла.
     dfs_by_id -- общий кэш {distributor_id: df} для ВСЕХ когда-либо запрошенных дистрибьюторов.
+    exclude_columns -- колонки, которые не нужны именно в этом файле (напр. для менеджеров).
     Возвращает (dfs_by_sheet, succeeded_names) для лога, либо None, если нечего сохранять."""
     dfs_by_sheet = {}
     succeeded_names = []
@@ -426,6 +427,10 @@ def build_excel_file(out_file, distributor_entries, dfs_by_id, run_started_dt, i
         if dist_id not in dfs_by_id:
             continue  # не получилось при сборе (см. failed в main) -- пропускаем молча
         df = dfs_by_id[dist_id]
+        if exclude_columns:
+            cols_to_drop = [c for c in exclude_columns if c in df.columns]
+            if cols_to_drop:
+                df = df.drop(columns=cols_to_drop)
         sheet_name = sanitize_sheet_name(name)
         base_name, i = sheet_name, 2
         while sheet_name in dfs_by_sheet:
@@ -490,7 +495,8 @@ def main():
     print("--- Файл для отдела продаж (сокращённый) ---")
     managers_entries = [(d["id"], d["name"]) for d in DISTRIBUTORS_MANAGERS]
     managers_sheets = build_excel_file(
-        "pricelist_managers.xlsx", managers_entries, dfs_by_id, run_started_dt, include_summary=False
+        "pricelist_managers.xlsx", managers_entries, dfs_by_id, run_started_dt,
+        include_summary=False, exclude_columns=["Дата изм. стока"]
     )
     if managers_sheets:
         upload_to_bitrix_disk(
