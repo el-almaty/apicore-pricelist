@@ -1,16 +1,28 @@
 """
-Скрипт собирает прайс-листы от нескольких дистрибьюторов apicore.kz:
-товары + закупочные цены + остатки -> один Excel-файл, каждый
-дистрибьютор на отдельном листе, и заливает результат на Диск Bitrix24.
+Скрипт собирает прайс-листы от нескольких дистрибьюторов apicore.kz и заливает
+на Диск Bitrix24 ДВА разных Excel-файла:
+
+1) "Прайс-лист.xlsx" -- полный, для закупщиков. Все дистрибьюторы из
+   APICORE_DISTRIBUTORS, каждый на отдельном листе, плюс лист "Сводка".
+   Заливается в папку BITRIX_FOLDER_ID_BUYERS (доступ ограничен).
+
+2) "Прайс-лист (для отдела продаж).xlsx" -- сокращённый, для менеджеров
+   по продажам. Только дистрибьюторы из APICORE_DISTRIBUTORS_MANAGERS,
+   без листа "Сводка". Заливается в BITRIX_FOLDER_ID_MANAGERS (общий доступ).
+
+Данные по каждому дистрибьютору запрашиваются у apicore только ОДИН раз,
+даже если он присутствует в обоих списках.
 
 Все секреты (ключи, ID) берутся из переменных окружения:
 - APICORE_API_KEY
-- APICORE_CATALOG_CODE   (необязательно, по умолчанию "main")
-- APICORE_DISTRIBUTORS   -- JSON-список дистрибьюторов, например:
-    [{"id": "3abb4152", "name": "Дистрибьютор А"},
-     {"id": "b4d0d204", "name": "Дистрибьютор Б"}]
+- APICORE_CATALOG_CODE           (необязательно, по умолчанию "main")
+- APICORE_DISTRIBUTORS           -- JSON-список для файла закупщиков
+- APICORE_DISTRIBUTORS_MANAGERS  -- JSON-список для файла отдела продаж
+    (формат обоих одинаковый):
+    [{"id": "3abb4152", "name": "Дистрибьютор А"}]
 - BITRIX_WEBHOOK
-- BITRIX_FOLDER_ID
+- BITRIX_FOLDER_ID_BUYERS
+- BITRIX_FOLDER_ID_MANAGERS
 
 Для GitHub Actions эти переменные передаются через Secrets репозитория
 (см. .github/workflows/update-pricelist.yml).
@@ -34,6 +46,7 @@ from openpyxl.formatting.rule import CellIsRule
 API_KEY = os.environ["APICORE_API_KEY"]
 CATALOG_CODE = os.environ.get("APICORE_CATALOG_CODE", "main")
 DISTRIBUTORS = json.loads(os.environ["APICORE_DISTRIBUTORS"])
+DISTRIBUTORS_MANAGERS = json.loads(os.environ["APICORE_DISTRIBUTORS_MANAGERS"])
 
 BASE_URL = "https://api.apicore.one/dealer"
 HEADERS = {
@@ -44,7 +57,8 @@ HEADERS = {
 
 # --- Bitrix24 ---
 BITRIX_WEBHOOK = os.environ["BITRIX_WEBHOOK"]  # напр. https://xxx.bitrix24.kz/rest/xx/xxxxxxxx/
-BITRIX_FOLDER_ID = os.environ["BITRIX_FOLDER_ID"]
+BITRIX_FOLDER_ID_BUYERS = os.environ["BITRIX_FOLDER_ID_BUYERS"]
+BITRIX_FOLDER_ID_MANAGERS = os.environ["BITRIX_FOLDER_ID_MANAGERS"]
 
 
 ILLEGAL_XLSX_CHARS = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
@@ -200,6 +214,9 @@ def fetch_distributor_df(distributor_id, run_started_at):
             "Артикул": clean_str(p.get("vendor_code", "")),
             "Цена, KZT": prices_by_id.get(pid),
             "Наличие, шт": qty_by_id.get(pid, 0),
+            # это дата, когда КОЛИЧЕСТВО последний раз ИЗМЕНИЛОСЬ у поставщика
+            # (не дата подтверждения/выгрузки данных дистрибьютором)
+            "Остаток не менялся с (apicore)": clean_str(qty_updated_by_id.get(pid, "")),
             "Штрихкод": clean_str(p.get("barcode", "")),
             "NTIN": clean_str(p.get("ntin", "")),
             "Данные получены": run_started_at,
@@ -215,8 +232,8 @@ def fetch_distributor_df(distributor_id, run_started_at):
     if (df["Производитель"] == "-").all():
         df = df.drop(columns=["Производитель"])
 
-    # то же самое для штрихкода и NTIN -- если пусто у всех товаров, колонка не нужна
-    for col in ["Штрихкод", "NTIN"]:
+    # то же самое для штрихкода, NTIN и даты изменения остатка -- если пусто у всех товаров, колонка не нужна
+    for col in ["Штрихкод", "NTIN", "Остаток не менялся с (apicore)"]:
         if (df[col].astype(str).str.strip() == "").all():
             df = df.drop(columns=[col])
 
@@ -398,35 +415,29 @@ def upload_to_bitrix_disk(local_file_path, folder_id, filename):
     return step2_result["result"]
 
 
-def main():
-    run_started_dt = datetime.now(ZoneInfo("Asia/Almaty"))
-    run_started_at = run_started_dt.strftime("%d.%m.%Y %H:%M:%S")
-    out_file = "pricelist.xlsx"
-
+def build_excel_file(out_file, distributor_entries, dfs_by_id, run_started_dt, include_summary):
+    """Собирает один Excel-файл из уже полученных данных.
+    distributor_entries -- список (id, name) в нужном порядке для этого файла.
+    dfs_by_id -- общий кэш {distributor_id: df} для ВСЕХ когда-либо запрошенных дистрибьюторов.
+    Возвращает (dfs_by_sheet, succeeded_names) для лога, либо None, если нечего сохранять."""
     dfs_by_sheet = {}
     succeeded_names = []
-    failed = []
-    for d in DISTRIBUTORS:
-        print(f"=== Дистрибьютор: {d['name']} ({d['id']}) ===")
-        try:
-            df = fetch_distributor_df(d["id"], run_started_at)
-        except Exception as e:
-            print(f"  ОШИБКА при обработке {d['name']} ({d['id']}): {e}")
-            failed.append(d["name"])
-            continue
-        sheet_name = sanitize_sheet_name(d["name"])
-        # на случай совпадения названий после обрезки/очистки -- не даём листам дублироваться
+    for dist_id, name in distributor_entries:
+        if dist_id not in dfs_by_id:
+            continue  # не получилось при сборе (см. failed в main) -- пропускаем молча
+        df = dfs_by_id[dist_id]
+        sheet_name = sanitize_sheet_name(name)
         base_name, i = sheet_name, 2
         while sheet_name in dfs_by_sheet:
             suffix = f" ({i})"
             sheet_name = base_name[: 31 - len(suffix)] + suffix
             i += 1
         dfs_by_sheet[sheet_name] = df
-        succeeded_names.append((d["name"], sheet_name))
-        print(f"  готово: {len(df)} строк")
+        succeeded_names.append((name, sheet_name))
 
     if not dfs_by_sheet:
-        raise RuntimeError("Ни один дистрибьютор не обработан успешно -- файл не создан.")
+        print(f"  Пропускаю {out_file}: нет ни одного успешно обработанного дистрибьютора для этого файла.")
+        return None
 
     with pd.ExcelWriter(out_file, engine="openpyxl") as writer:
         for sheet_name, df in dfs_by_sheet.items():
@@ -435,20 +446,60 @@ def main():
     wb = load_workbook(out_file)
     for sheet_name, df in dfs_by_sheet.items():
         format_worksheet(wb[sheet_name], df)
-    build_summary_sheet(wb, succeeded_names, run_started_dt)
+    if include_summary:
+        build_summary_sheet(wb, succeeded_names, run_started_dt)
     wb.save(out_file)
 
     total_rows = sum(len(df) for df in dfs_by_sheet.values())
-    print(f"Готово. Файл сохранён: {out_file} ({len(dfs_by_sheet)} листов, {total_rows} строк всего)")
+    print(f"  Готово: {out_file} ({len(dfs_by_sheet)} листов, {total_rows} строк всего)")
+    return dfs_by_sheet
 
-    if BITRIX_FOLDER_ID:
-        upload_to_bitrix_disk(out_file, BITRIX_FOLDER_ID, "Прайс-лист.xlsx")
-    else:
-        print("BITRIX_FOLDER_ID не задан -- пропускаю загрузку на Bitrix24 Диск.")
+
+def main():
+    run_started_dt = datetime.now(ZoneInfo("Asia/Almaty"))
+    run_started_at = run_started_dt.strftime("%d.%m.%Y %H:%M:%S")
+
+    # объединяем оба списка -- каждого дистрибьютора запрашиваем у apicore ОДИН раз,
+    # даже если он присутствует в обоих файлах (напр. elco.kz -- и у закупщиков, и у продаж)
+    combined_by_id = {}
+    for d in DISTRIBUTORS + DISTRIBUTORS_MANAGERS:
+        combined_by_id.setdefault(d["id"], d)
+
+    dfs_by_id = {}
+    failed = []
+    for d in combined_by_id.values():
+        print(f"=== Дистрибьютор: {d['name']} ({d['id']}) ===")
+        try:
+            dfs_by_id[d["id"]] = fetch_distributor_df(d["id"], run_started_at)
+            print(f"  готово: {len(dfs_by_id[d['id']])} строк")
+        except Exception as e:
+            print(f"  ОШИБКА при обработке {d['name']} ({d['id']}): {e}")
+            failed.append(d["name"])
+
+    if not dfs_by_id:
+        raise RuntimeError("Ни один дистрибьютор не обработан успешно -- файлы не созданы.")
+
+    print("--- Файл для закупщиков (полный) ---")
+    buyers_entries = [(d["id"], d["name"]) for d in DISTRIBUTORS]
+    buyers_sheets = build_excel_file(
+        "pricelist_buyers.xlsx", buyers_entries, dfs_by_id, run_started_dt, include_summary=True
+    )
+    if buyers_sheets:
+        upload_to_bitrix_disk("pricelist_buyers.xlsx", BITRIX_FOLDER_ID_BUYERS, "Прайс-лист.xlsx")
+
+    print("--- Файл для отдела продаж (сокращённый) ---")
+    managers_entries = [(d["id"], d["name"]) for d in DISTRIBUTORS_MANAGERS]
+    managers_sheets = build_excel_file(
+        "pricelist_managers.xlsx", managers_entries, dfs_by_id, run_started_dt, include_summary=False
+    )
+    if managers_sheets:
+        upload_to_bitrix_disk(
+            "pricelist_managers.xlsx", BITRIX_FOLDER_ID_MANAGERS, "Прайс-лист (для отдела продаж).xlsx"
+        )
 
     if failed:
         print(f"ВНИМАНИЕ: не удалось обработать {len(failed)} дистрибьютор(ов): {', '.join(failed)}")
-        raise SystemExit(1)  # файл всё равно загружен, но запуск помечается как проблемный
+        raise SystemExit(1)  # файлы всё равно загружены (что успело собраться), но запуск помечается проблемным
 
 
 if __name__ == "__main__":
