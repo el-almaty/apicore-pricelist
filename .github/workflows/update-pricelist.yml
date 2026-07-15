@@ -22,7 +22,9 @@ jobs:
         env:
           APICORE_API_KEY: ${{ secrets.APICORE_API_KEY }}
           APICORE_DISTRIBUTORS: ${{ secrets.APICORE_DISTRIBUTORS }}
+          APICORE_DISTRIBUTORS_MANAGERS: ${{ secrets.APICORE_DISTRIBUTORS_MANAGERS }}
           APICORE_CATALOG_CODE: ${{ secrets.APICORE_CATALOG_CODE }}
           BITRIX_WEBHOOK: ${{ secrets.BITRIX_WEBHOOK }}
-          BITRIX_FOLDER_ID: ${{ secrets.BITRIX_FOLDER_ID }}
+          BITRIX_FOLDER_ID_BUYERS: ${{ secrets.BITRIX_FOLDER_ID_BUYERS }}
+          BITRIX_FOLDER_ID_MANAGERS: ${{ secrets.BITRIX_FOLDER_ID_MANAGERS }}
         run: python apicore_pricelist.py
