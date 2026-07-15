@@ -175,8 +175,12 @@ def fetch_distributor_df(distributor_id, run_started_at):
     qty_updated_by_id = {}
     for p in qty_list:
         qty_by_id[p["product_id"]] = p["quantity"]
-        if "date_update" in p:
-            qty_updated_by_id[p["product_id"]] = p["date_update"]
+        raw_date = p.get("date_update")
+        if raw_date:
+            try:
+                qty_updated_by_id[p["product_id"]] = datetime.strptime(raw_date, "%d.%m.%Y").date()
+            except ValueError:
+                qty_updated_by_id[p["product_id"]] = clean_str(raw_date)  # не распознали формат -- оставляем как текст
     time.sleep(0.7)
 
     # Сначала считаем цепочку категорий для каждого товара и находим
@@ -287,9 +291,12 @@ def format_worksheet(ws, df):
 
     price_col = df.columns.get_loc("Цена, KZT") + 1
     qty_col = df.columns.get_loc("Наличие, шт") + 1
+    date_col = df.columns.get_loc("Дата изм. стока") + 1 if "Дата изм. стока" in df.columns else None
     for row in range(2, n_rows + 1):
         ws.cell(row=row, column=price_col).number_format = "#,##0"
         ws.cell(row=row, column=qty_col).number_format = "#,##0"
+        if date_col:
+            ws.cell(row=row, column=date_col).number_format = "dd.mm.yyyy"
 
 
 def build_summary_sheet(wb, distributors_and_sheets, run_started_dt):
